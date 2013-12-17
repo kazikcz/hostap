@@ -2040,13 +2040,12 @@ static void free_beacon_data(struct beacon_data *beacon)
 }
 
 
-static int hostapd_build_beacon_data(struct hostapd_iface *iface,
+static int hostapd_build_beacon_data(struct hostapd_data *hapd,
 				     struct beacon_data *beacon)
 {
 	struct wpabuf *beacon_extra, *proberesp_extra, *assocresp_extra;
 	struct wpa_driver_ap_params params;
 	int ret;
-	struct hostapd_data *hapd = iface->bss[0];
 
 	os_memset(beacon, 0, sizeof(*beacon));
 	ret = ieee802_11_build_ap_params(hapd, &params);
@@ -2170,14 +2169,15 @@ static int hostapd_change_config_freq(struct hostapd_data *hapd,
 }
 
 
-static int hostapd_fill_csa_settings(struct hostapd_iface *iface,
+static int hostapd_fill_csa_settings(struct hostapd_data *hapd,
 				     struct csa_settings *settings)
 {
+	struct hostapd_iface *iface = hapd->iface;
 	struct hostapd_freq_params old_freq;
 	int ret;
 
 	os_memset(&old_freq, 0, sizeof(old_freq));
-	if (!iface || !iface->freq || iface->csa_in_progress)
+	if (!iface || !iface->freq || hapd->csa_in_progress)
 		return -1;
 
 	ret = hostapd_change_config_freq(iface->bss[0], iface->conf,
@@ -2186,7 +2186,7 @@ static int hostapd_fill_csa_settings(struct hostapd_iface *iface,
 	if (ret)
 		return ret;
 
-	ret = hostapd_build_beacon_data(iface, &settings->beacon_after);
+	ret = hostapd_build_beacon_data(hapd, &settings->beacon_after);
 
 	/* change back the configuration */
 	hostapd_change_config_freq(iface->bss[0], iface->conf,
@@ -2196,18 +2196,18 @@ static int hostapd_fill_csa_settings(struct hostapd_iface *iface,
 		return ret;
 
 	/* set channel switch parameters for csa ie */
-	iface->cs_freq_params = settings->freq_params;
-	iface->cs_count = settings->cs_count;
-	iface->cs_block_tx = settings->block_tx;
+	hapd->cs_freq_params = settings->freq_params;
+	hapd->cs_count = settings->cs_count;
+	hapd->cs_block_tx = settings->block_tx;
 
-	ret = hostapd_build_beacon_data(iface, &settings->beacon_csa);
+	ret = hostapd_build_beacon_data(hapd, &settings->beacon_csa);
 	if (ret) {
 		free_beacon_data(&settings->beacon_after);
 		return ret;
 	}
 
-	settings->counter_offset_beacon = iface->cs_c_off_beacon;
-	settings->counter_offset_presp = iface->cs_c_off_proberesp;
+	settings->counter_offset_beacon = hapd->cs_c_off_beacon;
+	settings->counter_offset_presp = hapd->cs_c_off_proberesp;
 
 	return 0;
 }
@@ -2215,13 +2215,13 @@ static int hostapd_fill_csa_settings(struct hostapd_iface *iface,
 
 void hostapd_cleanup_cs_params(struct hostapd_data *hapd)
 {
-	os_memset(&hapd->iface->cs_freq_params, 0,
-		  sizeof(hapd->iface->cs_freq_params));
-	hapd->iface->cs_count = 0;
-	hapd->iface->cs_block_tx = 0;
-	hapd->iface->cs_c_off_beacon = 0;
-	hapd->iface->cs_c_off_proberesp = 0;
-	hapd->iface->csa_in_progress = 0;
+	os_memset(&hapd->cs_freq_params, 0,
+		  sizeof(hapd->cs_freq_params));
+	hapd->cs_count = 0;
+	hapd->cs_block_tx = 0;
+	hapd->cs_c_off_beacon = 0;
+	hapd->cs_c_off_proberesp = 0;
+	hapd->csa_in_progress = 0;
 }
 
 
@@ -2229,7 +2229,7 @@ int hostapd_switch_channel(struct hostapd_data *hapd,
 			   struct csa_settings *settings)
 {
 	int ret;
-	ret = hostapd_fill_csa_settings(hapd->iface, settings);
+	ret = hostapd_fill_csa_settings(hapd, settings);
 	if (ret)
 		return ret;
 
@@ -2243,7 +2243,7 @@ int hostapd_switch_channel(struct hostapd_data *hapd,
 		return ret;
 	}
 
-	hapd->iface->csa_in_progress = 1;
+	hapd->csa_in_progress = 1;
 	return 0;
 }
 
