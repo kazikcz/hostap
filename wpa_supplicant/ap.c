@@ -1068,7 +1068,10 @@ int ap_switch_channel(struct wpa_supplicant *wpa_s,
 	if (!wpa_s->ap_iface || !wpa_s->ap_iface->bss[0])
 		return -1;
 
-	return hostapd_switch_channel(wpa_s->ap_iface->bss[0], settings);
+	settings->hapd = wpa_s->ap_iface->bss[0];
+	settings->priv = wpa_s->ap_iface->bss[0]->drv_priv;
+
+	return hostapd_switch_channel(settings, 1);
 #else /* NEED_AP_MLME */
 	return -1;
 #endif /* NEED_AP_MLME */

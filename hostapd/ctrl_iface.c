@@ -1077,7 +1077,10 @@ static int hostapd_ctrl_iface_chan_switch(struct hostapd_data *hapd, char *pos)
 	if (ret)
 		return ret;
 
-	return hostapd_switch_channel(hapd, &settings);
+	settings.hapd = hapd;
+	settings.priv = hapd->drv_priv;
+
+	return hostapd_switch_channel(&settings, 1);
 #else /* NEED_AP_MLME */
 	return -1;
 #endif /* NEED_AP_MLME */

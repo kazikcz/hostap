@@ -11390,13 +11390,18 @@ nla_put_failure:
 }
 
 
-static int nl80211_switch_channel(void *priv, struct csa_settings *settings)
+static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
+				  int num_settings)
 {
 	struct nl_msg *msg;
 	struct i802_bss *bss = priv;
 	struct wpa_driver_nl80211_data *drv = bss->drv;
 	struct nlattr *beacon_csa;
 	int ret = -ENOBUFS;
+
+	/* multi-BSS not implemented yet */
+	if (num_settings != 1)
+		return -EOPNOTSUPP;
 
 	wpa_printf(MSG_DEBUG, "nl80211: Channel switch request (cs_count=%u block_tx=%u freq=%d width=%d cf1=%d cf2=%d)",
 		   settings->cs_count, settings->block_tx,

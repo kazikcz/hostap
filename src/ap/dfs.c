@@ -708,6 +708,8 @@ static int hostapd_dfs_start_channel_switch(struct hostapd_iface *iface)
 
 	/* Setup CSA request */
 	os_memset(&csa_settings, 0, sizeof(csa_settings));
+	csa_settings.hapd = hapd;
+	csa_settings.priv = hapd->drv_priv;
 	csa_settings.cs_count = 5;
 	csa_settings.block_tx = 1;
 	err = hostapd_set_freq_params(&csa_settings.freq_params,
@@ -728,7 +730,7 @@ static int hostapd_dfs_start_channel_switch(struct hostapd_iface *iface)
 		return err;
 	}
 
-	err = hostapd_switch_channel(hapd, &csa_settings);
+	err = hostapd_switch_channel(&csa_settings, 1);
 	if (err) {
 		wpa_printf(MSG_WARNING, "DFS failed to schedule CSA (%d) - trying fallback",
 			   err);

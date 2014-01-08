@@ -1209,6 +1209,8 @@ struct beacon_data {
 
 /**
  * struct csa_settings - Settings for channel switch command
+ * @hapd: Pointer to hostapd context
+ * @priv: Pointer to driver-specific context.
  * @cs_count: Count in Beacon frames (TBTT) to perform the switch
  * @block_tx: 1 - block transmission for CSA period
  * @freq_params: Next channel frequency parameter
@@ -1218,6 +1220,9 @@ struct beacon_data {
  * @counter_offset_presp: Offset to the count field in probe resp.
  */
 struct csa_settings {
+	struct hostapd_data *hapd;
+	void *priv;
+
 	u8 cs_count;
 	u8 block_tx;
 
@@ -2618,13 +2623,15 @@ struct wpa_driver_ops {
 	 * switch_channel - Announce channel switch and migrate the GO to the
 	 * given frequency
 	 * @priv: Private driver interface data
-	 * @settings: Settings for CSA period and new channel
+	 * @settings: Settings for CSA period and new channel for multiple BSSes
+	 * @num_settings: Number of CSA settings for different BSSes
 	 * Returns: 0 on success, -1 on failure
 	 *
 	 * This function is used to move the GO to the legacy STA channel to
 	 * avoid frequency conflict in single channel concurrency.
 	 */
-	int (*switch_channel)(void *priv, struct csa_settings *settings);
+	int (*switch_channel)(void *priv, struct csa_settings *settings,
+			      int num_settings);
 
 	/**
 	 * start_dfs_cac - Listen for radar interference on the channel
