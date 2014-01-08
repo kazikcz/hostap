@@ -11397,11 +11397,14 @@ static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
 	struct i802_bss *bss = priv;
 	struct wpa_driver_nl80211_data *drv = bss->drv;
 	struct nlattr *beacon_csa;
-	int ret = -ENOBUFS;
+	/* cfg80211 at this time doesn't support more than 8 CSA settings. */
+#define MAX_NUM_SETTINGS 8
+	/* first settings struct is flat, others are nested */
+	struct nlattr *nested_attrs[MAX_NUM_SETTINGS - 1];
+	int i, ret = -ENOBUFS, num_nested = 0;
 
-	/* multi-BSS not implemented yet */
-	if (num_settings != 1)
-		return -EOPNOTSUPP;
+	if (num_settings > MAX_NUM_SETTINGS)
+		return -EINVAL;
 
 	wpa_printf(MSG_DEBUG, "nl80211: Channel switch request (cs_count=%u block_tx=%u freq=%d width=%d cf1=%d cf2=%d)",
 		   settings->cs_count, settings->block_tx,
@@ -11419,25 +11422,31 @@ static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
 		return -EOPNOTSUPP;
 
 	/* check settings validity */
-	if (!settings->beacon_csa.tail ||
-	    ((settings->beacon_csa.tail_len <=
-	      settings->counter_offset_beacon) ||
-	     (settings->beacon_csa.tail[settings->counter_offset_beacon] !=
-	      settings->cs_count)))
-		return -EINVAL;
+	for (i = 0; i < num_settings; i++) {
+		if (!settings->beacon_csa.tail ||
+		    ((settings->beacon_csa.tail_len <=
+		      settings->counter_offset_beacon) ||
+		     (settings->beacon_csa.tail[settings->counter_offset_beacon] !=
+		      settings->cs_count)))
+			return -EINVAL;
 
-	if (settings->beacon_csa.probe_resp &&
-	    ((settings->beacon_csa.probe_resp_len <=
-	      settings->counter_offset_presp) ||
-	     (settings->beacon_csa.probe_resp[settings->counter_offset_presp] !=
-	      settings->cs_count)))
-		return -EINVAL;
+		if (settings->beacon_csa.probe_resp &&
+		    ((settings->beacon_csa.probe_resp_len <=
+		      settings->counter_offset_presp) ||
+		     (settings->beacon_csa.probe_resp[settings->counter_offset_presp] !=
+		      settings->cs_count)))
+			return -EINVAL;
+	}
 
 	msg = nlmsg_alloc();
 	if (!msg)
 		return -ENOMEM;
 
 	nl80211_cmd(drv, msg, 0, NL80211_CMD_CHANNEL_SWITCH);
+
+next_settings:
+	bss = settings->priv;
+
 	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
 	NLA_PUT_U32(msg, NL80211_ATTR_CH_SWITCH_COUNT, settings->cs_count);
 	ret = nl80211_put_freq_params(msg, &settings->freq_params);
@@ -11469,6 +11478,24 @@ static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
 			    settings->counter_offset_presp);
 
 	nla_nest_end(msg, beacon_csa);
+
+	if (--num_settings > 0) {
+		/* all CSA settings except the first one are recursively nested
+		 * in each other */
+
+		nested_attrs[num_nested] = nla_nest_start(msg, NL80211_ATTR_CH_SWITCH_NEXT);
+		if (!nested_attrs[num_nested])
+			goto error;
+
+		num_nested++;
+		settings++;
+
+		goto next_settings;
+	}
+
+	for (; num_nested > 0; num_nested--)
+		nla_nest_end(msg, nested_attrs[num_nested - 1]);
+
 	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
 	if (ret) {
 		wpa_printf(MSG_DEBUG, "nl80211: switch_channel failed err=%d (%s)",
