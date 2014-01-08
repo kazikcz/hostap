@@ -11390,18 +11390,87 @@ nla_put_failure:
 }
 
 
+static int set_csa_settings(struct nl_msg *msg,
+			    struct csa_settings *settings)
+{
+	struct i802_bss *bss = settings->priv;
+	struct nlattr *beacon_csa;
+	int ret;
+
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_CH_SWITCH_COUNT, settings->cs_count);
+	ret = nl80211_put_freq_params(msg, &settings->freq_params);
+	if (ret)
+		return ret;
+
+	if (settings->block_tx)
+		NLA_PUT_FLAG(msg, NL80211_ATTR_CH_SWITCH_BLOCK_TX);
+
+	/* beacon_after params */
+	ret = set_beacon_data(msg, &settings->beacon_after);
+	if (ret)
+		return ret;
+
+	/* beacon_csa params */
+	beacon_csa = nla_nest_start(msg, NL80211_ATTR_CSA_IES);
+	if (!beacon_csa)
+		return -ENOBUFS;
+
+	ret = set_beacon_data(msg, &settings->beacon_csa);
+	if (ret)
+		return ret;
+
+	NLA_PUT_U16(msg, NL80211_ATTR_CSA_C_OFF_BEACON,
+		    settings->counter_offset_beacon);
+
+	if (settings->beacon_csa.probe_resp)
+		NLA_PUT_U16(msg, NL80211_ATTR_CSA_C_OFF_PRESP,
+			    settings->counter_offset_presp);
+
+	nla_nest_end(msg, beacon_csa);
+
+	return 0;
+
+nla_put_failure:
+	return -ENOBUFS;
+}
+
+
+static int validate_csa_settings(struct csa_settings *settings,
+				 int num_settings)
+{
+	int i;
+
+	if (num_settings <= 0)
+		return -EINVAL;
+
+	for (i = 0; i < num_settings; i++) {
+		if (!settings->beacon_csa.tail ||
+		    ((settings->beacon_csa.tail_len <=
+		      settings->counter_offset_beacon) ||
+		     (settings->beacon_csa.tail[settings->counter_offset_beacon] !=
+		      settings->cs_count)))
+			return -EINVAL;
+
+		if (settings->beacon_csa.probe_resp &&
+		    ((settings->beacon_csa.probe_resp_len <=
+		      settings->counter_offset_presp) ||
+		     (settings->beacon_csa.probe_resp[settings->counter_offset_presp] !=
+		      settings->cs_count)))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
+
 static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
 				  int num_settings)
 {
 	struct nl_msg *msg;
 	struct i802_bss *bss = priv;
 	struct wpa_driver_nl80211_data *drv = bss->drv;
-	struct nlattr *beacon_csa;
-	int ret = -ENOBUFS;
-
-	/* multi-BSS not implemented yet */
-	if (num_settings != 1)
-		return -EOPNOTSUPP;
+	int i, ret = -ENOBUFS;
 
 	wpa_printf(MSG_DEBUG, "nl80211: Channel switch request (cs_count=%u block_tx=%u freq=%d width=%d cf1=%d cf2=%d)",
 		   settings->cs_count, settings->block_tx,
@@ -11418,62 +11487,53 @@ static int nl80211_switch_channel(void *priv, struct csa_settings *settings,
 	    (drv->nlmode != NL80211_IFTYPE_P2P_GO))
 		return -EOPNOTSUPP;
 
-	/* check settings validity */
-	if (!settings->beacon_csa.tail ||
-	    ((settings->beacon_csa.tail_len <=
-	      settings->counter_offset_beacon) ||
-	     (settings->beacon_csa.tail[settings->counter_offset_beacon] !=
-	      settings->cs_count)))
-		return -EINVAL;
-
-	if (settings->beacon_csa.probe_resp &&
-	    ((settings->beacon_csa.probe_resp_len <=
-	      settings->counter_offset_presp) ||
-	     (settings->beacon_csa.probe_resp[settings->counter_offset_presp] !=
-	      settings->cs_count)))
-		return -EINVAL;
+	ret = validate_csa_settings(settings, num_settings);
+	if (ret)
+		return ret;
 
 	msg = nlmsg_alloc();
 	if (!msg)
 		return -ENOMEM;
 
 	nl80211_cmd(drv, msg, 0, NL80211_CMD_CHANNEL_SWITCH);
-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
-	NLA_PUT_U32(msg, NL80211_ATTR_CH_SWITCH_COUNT, settings->cs_count);
-	ret = nl80211_put_freq_params(msg, &settings->freq_params);
-	if (ret)
-		goto error;
+	NLA_PUT_U32(msg, NL80211_ATTR_WIPHY, bss->wiphy_data->wiphy_idx);
 
-	if (settings->block_tx)
-		NLA_PUT_FLAG(msg, NL80211_ATTR_CH_SWITCH_BLOCK_TX);
+	if (num_settings == 1) {
+		/* use old command format for single interface to talk with
+		 * older kernels */
+		ret = set_csa_settings(msg, &settings[0]);
+		if (ret)
+			goto error;
+	}
+	else {
+		struct nlattr *ifaces;
 
-	/* beacon_after params */
-	ret = set_beacon_data(msg, &settings->beacon_after);
-	if (ret)
-		goto error;
+		/* newer kernel support multi-interface CSA with an extended
+		 * command structure */
+		ifaces = nla_nest_start(msg, NL80211_ATTR_CH_SWITCH_IFACES);
+		if (!ifaces)
+			goto nla_put_failure;
 
-	/* beacon_csa params */
-	beacon_csa = nla_nest_start(msg, NL80211_ATTR_CSA_IES);
-	if (!beacon_csa)
-		goto nla_put_failure;
+		for (i = 0; i < num_settings; i++) {
+			struct nlattr *iface;
 
-	ret = set_beacon_data(msg, &settings->beacon_csa);
-	if (ret)
-		goto error;
+			iface = nla_nest_start(msg, i + 1);
+			ret = set_csa_settings(msg, &settings[i]);
+			nla_nest_end(msg, iface);
 
-	NLA_PUT_U16(msg, NL80211_ATTR_CSA_C_OFF_BEACON,
-		    settings->counter_offset_beacon);
+			if (ret)
+				goto error;
+		}
 
-	if (settings->beacon_csa.probe_resp)
-		NLA_PUT_U16(msg, NL80211_ATTR_CSA_C_OFF_PRESP,
-			    settings->counter_offset_presp);
+		nla_nest_end(msg, ifaces);
+	}
 
-	nla_nest_end(msg, beacon_csa);
 	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
 	if (ret) {
 		wpa_printf(MSG_DEBUG, "nl80211: switch_channel failed err=%d (%s)",
 			   ret, strerror(-ret));
 	}
+
 	return ret;
 
 nla_put_failure:
