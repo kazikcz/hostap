@@ -2169,9 +2169,9 @@ static int hostapd_change_config_freq(struct hostapd_data *hapd,
 }
 
 
-static int hostapd_fill_csa_settings(struct hostapd_data *hapd,
-				     struct csa_settings *settings)
+static int hostapd_fill_csa_settings(struct csa_settings *settings)
 {
+	struct hostapd_data *hapd = settings->hapd;
 	struct hostapd_iface *iface = hapd->iface;
 	struct hostapd_freq_params old_freq;
 	int ret;
@@ -2225,25 +2225,34 @@ void hostapd_cleanup_cs_params(struct hostapd_data *hapd)
 }
 
 
-int hostapd_switch_channel(struct hostapd_data *hapd,
-			   struct csa_settings *settings)
+int hostapd_switch_channel(struct csa_settings *settings,
+			   int num_settings)
 {
-	int ret;
-	ret = hostapd_fill_csa_settings(hapd, settings);
-	if (ret)
-		return ret;
+	int i, ret;
 
-	ret = hostapd_drv_switch_channel(hapd, settings);
-	free_beacon_data(&settings->beacon_csa);
-	free_beacon_data(&settings->beacon_after);
+	for (i = 0; i < num_settings; i++) {
+		ret = hostapd_fill_csa_settings(&settings[i]);
+		if (ret)
+			return ret;
+	}
+
+	ret = hostapd_drv_switch_channel(settings, num_settings);
+
+	for (i = 0; i < num_settings; i++) {
+		free_beacon_data(&settings[i].beacon_csa);
+		free_beacon_data(&settings[i].beacon_after);
+	}
 
 	if (ret) {
 		/* if we failed, clean cs parameters */
-		hostapd_cleanup_cs_params(hapd);
+		for (i = 0; i < num_settings; i++)
+			hostapd_cleanup_cs_params(settings[i].hapd);
 		return ret;
 	}
 
-	hapd->csa_in_progress = 1;
+	for (i = 0; i < num_settings; i++)
+		settings[i].hapd->csa_in_progress = 1;
+
 	return 0;
 }
 
