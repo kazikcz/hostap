@@ -1071,16 +1071,28 @@ static int hostapd_ctrl_iface_mgmt_tx(struct hostapd_data *hapd, char *cmd)
 static int hostapd_ctrl_iface_chan_switch(struct hostapd_data *hapd, char *pos)
 {
 #ifdef NEED_AP_MLME
-	struct csa_settings settings;
-	int ret = hostapd_parse_csa_settings(pos, &settings);
+	struct csa_settings settings_def;
+	struct csa_settings *settings;
+	int ret, i;
 
+	ret = hostapd_parse_csa_settings(pos, &settings_def);
 	if (ret)
 		return ret;
 
-	settings.hapd = hapd;
-	settings.priv = hapd->drv_priv;
+	settings = os_malloc(sizeof(*settings) * hapd->iface->num_bss);
+	if (settings == NULL)
+		return -ENOMEM;
 
-	return hostapd_switch_channel(&settings, 1);
+	for (i = 0; i < hapd->iface->num_bss; i++) {
+		memcpy(&settings[i], &settings_def, sizeof(settings_def));
+		settings[i].hapd = hapd->iface->bss[i];
+		settings[i].priv = hapd->iface->bss[i]->drv_priv;
+	}
+
+	ret = hostapd_switch_channel(settings, hapd->iface->num_bss);
+	os_free(settings);
+
+	return ret;
 #else /* NEED_AP_MLME */
 	return -1;
 #endif /* NEED_AP_MLME */
