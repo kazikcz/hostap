@@ -669,6 +669,56 @@ static int hostapd_dfs_start_channel_switch_cac(struct hostapd_iface *iface)
 }
 
 
+static struct csa_settings *
+hostapd_dfs_get_csa_settings(struct hostapd_iface *iface,
+			     struct hostapd_channel_data *channel,
+			     int secondary_channel,
+			     u8 vht_oper_centr_freq_seg0_idx,
+			     u8 vht_oper_centr_freq_seg1_idx)
+{
+	struct csa_settings *csa_settings;
+	int err, i;
+
+	csa_settings = os_malloc(sizeof(*csa_settings) * iface->num_bss);
+	if (!csa_settings)
+		return NULL;
+
+	memset(csa_settings, 0, sizeof(*csa_settings) * iface->num_bss);
+
+	for (i = 0; i < iface->num_bss; i++) {
+		struct hostapd_data *hapd = iface->bss[i];
+
+		csa_settings[i].hapd = hapd;
+		csa_settings[i].priv = hapd->drv_priv;
+		csa_settings[i].block_tx = 1;
+
+		/* FIXME: compute this depending on regulatory domain and
+		 * beacon interval to match regulatory quiescing requirements
+		 */
+		csa_settings[i].cs_count = 5;
+
+		err = hostapd_set_freq_params(&csa_settings[i].freq_params,
+					      iface->conf->hw_mode,
+					      channel->freq,
+					      channel->chan,
+					      hapd->iconf->ieee80211n,
+					      hapd->iconf->ieee80211ac,
+					      secondary_channel,
+					      hapd->iconf->vht_oper_chwidth,
+					      vht_oper_centr_freq_seg0_idx,
+					      vht_oper_centr_freq_seg1_idx,
+					      iface->current_mode->vht_capab);
+		if (err) {
+			wpa_printf(MSG_ERROR, "DFS failed to calculate CSA freq params");
+			os_free(csa_settings);
+			return NULL;
+		}
+	}
+
+	return csa_settings;
+}
+
+
 static int hostapd_dfs_start_channel_switch(struct hostapd_iface *iface)
 {
 	struct hostapd_channel_data *channel;
@@ -676,8 +726,7 @@ static int hostapd_dfs_start_channel_switch(struct hostapd_iface *iface)
 	u8 vht_oper_centr_freq_seg0_idx;
 	u8 vht_oper_centr_freq_seg1_idx;
 	int skip_radar = 1;
-	struct csa_settings csa_settings;
-	struct hostapd_data *hapd = iface->bss[0];
+	struct csa_settings *csa_settings;
 	int err = 1;
 
 	wpa_printf(MSG_DEBUG, "%s called (CAC active: %s)", __func__,
@@ -707,30 +756,18 @@ static int hostapd_dfs_start_channel_switch(struct hostapd_iface *iface)
 		channel->chan, secondary_channel);
 
 	/* Setup CSA request */
-	os_memset(&csa_settings, 0, sizeof(csa_settings));
-	csa_settings.hapd = hapd;
-	csa_settings.priv = hapd->drv_priv;
-	csa_settings.cs_count = 5;
-	csa_settings.block_tx = 1;
-	err = hostapd_set_freq_params(&csa_settings.freq_params,
-				      iface->conf->hw_mode,
-				      channel->freq,
-				      channel->chan,
-				      iface->conf->ieee80211n,
-				      iface->conf->ieee80211ac,
-				      secondary_channel,
-				      iface->conf->vht_oper_chwidth,
-				      vht_oper_centr_freq_seg0_idx,
-				      vht_oper_centr_freq_seg1_idx,
-				      iface->current_mode->vht_capab);
+	csa_settings = hostapd_dfs_get_csa_settings(iface, channel,
+						    secondary_channel,
+						    vht_oper_centr_freq_seg0_idx,
+						    vht_oper_centr_freq_seg1_idx);
 
-	if (err) {
-		wpa_printf(MSG_ERROR, "DFS failed to calculate CSA freq params");
-		hostapd_disable_iface(iface);
-		return err;
+	if (csa_settings) {
+		err = hostapd_switch_channel(csa_settings, iface->num_bss);
+		os_free(csa_settings);
+	} else {
+		err = -1; /* just try fallback */
 	}
 
-	err = hostapd_switch_channel(&csa_settings, 1);
 	if (err) {
 		wpa_printf(MSG_WARNING, "DFS failed to schedule CSA (%d) - trying fallback",
 			   err);
